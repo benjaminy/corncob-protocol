@@ -1,235 +1,323 @@
 # CornCob
 
 import os
+import sys
 import subprocess
 import secrets
 import yaml
 import pathlib
 import shutil
+import tempfile
 
 program_title = "CornCob protocol Git remote helper work-a-like"
 
-def main( cmd, remote, dotdotdot ):
-    result = change_to_root_git_dir()
-    if result != 0:
-        return result
+class Corncob:
 
-    print( f"Hello World! {cmd} {remote} {dotdotdot}" )
+    def __init__( self, remote_name ):
+        self.remote_name = remote_name
+        self.url = None
 
-    if cmd == "add":
-        return corncob_add( remote, dotdotdot[ 0 ], dotdotdot[ 1: ] )
-    elif cmd == "remove":
-        return corncob_remove( remote, dotdotdot )
+    def main( self, cmd, dotdotdot ):
+        if cmd == "clone":
+            if len( dotdotdot ) < 1:
+                print( f"ERROR: clone requires a URL ({program_title})" )
+                return -1
+            return self.clone_from_remote( dotdotdot[ 0 ] )
 
-    corncob_url = get_corncob_url( remote )
-    if corncob_url == None:
-        return -1
+        result = self.change_to_root_git_dir()
+        if result != 0:
+            return result
 
-    if cmd == "push":
-        return corncob_push( remote, corncob_url, dotdotdot )
-    elif cmd == "fetch":
-        return corncob_fetch( remote, corncob_url, dotdotdot )
-    elif cmd == "clone":
-        return corncob_clone( remote, corncob_url, dotdotdot )
-    else:
-        print( f"{program_title}: error: Unknown command '{cmd}'" )
+        print( f"Hello World! {cmd} {self.remote_name} {dotdotdot}" )
+
+        if cmd == "add":
+            if len( dotdotdot ) < 1:
+                print( f"ERROR: remote-add requires a URL ({program_title})" )
+                return -1
+            return self.add_remote( dotdotdot[ 0 ], dotdotdot[ 1: ] )
+        elif cmd == "remove":
+            return self.remove_remote( dotdotdot )
+
+        
+        self.initialize_existing_remote()
+        if self.url == None:
+            return -1
+
+        self.remote = CornCobRemote.init( self.url )
+
+        if cmd == "push":
+            return self.push_to_remote( dotdotdot )
+        elif cmd == "fetch":
+            return self.corncob_fetch( dotdotdot )
+        else:
+            print( f"ERROR: Unknown command '{cmd}' ({program_title})" )
 
 
-def corncob_add( remote, url, dotdotdot ):
-    """Add a CornCob remote
+    def add_remote( self, url, dotdotdot ):
+        """Add a CornCob remote
 
-    :param remote: The nickname for the remote
-    :param url: The URL for the remote. (This should not include 'corncob:')
+        :param remote: The nickname for the remote
+        :param url: The URL for the remote. (This should not include 'corncob:')
 
-    Currently the only supported URL schema is file://
-    In the fullness of time the idea is to support googledrive: , etc
+        Currently the only supported URL schema is file://
+        In the fullness of time the idea is to support googledrive: , etc
 
-    This function adds 2 remotes to the underlying repo:
-       - One with the actual remote URL
+        This function adds 2 remotes to the underlying repo:
+        - One with the actual remote URL
           - This one is never directly `git fetch`d or `git push`d or whatever
-       - One with a temp bundle name
+        - One with a temp bundle name
           - When pulling from a remote, the bundle is copied here and `git fetch`d
-    """
+        """
 
-    git_cmd = [ "git", "remote", "add", remote, f"corncob:{url}" ]
-    result = subprocess.run( git_cmd, shell=False, capture_output=True, text=True )
-    if result.returncode != 0:
-        print( f"{program_title}: error: Failed to add remote '{remote}' url: '{url}' {result.stderr}" )
-        return -1
+        git_cmd = [ "git", "remote", "add", self.remote_name, f"corncob:{url}" ]
+        result = subprocess.run( git_cmd, shell=False, capture_output=True, text=True )
+        if result.returncode == 0:
+            print( f"Added remote '{self.remote_name}' ({url})" )
+        else:
+            print( f"ERROR: Failed to add remote '{self.remote_name}' url: '{url}' {result.stderr} ({program_title})" )
+            return -1
 
-    bundle_remote = f"{remote}-corncob-bundle-tmp"
-    path = f"./.corncob-bundle-tmp/{remote}.bundle"
-    git_cmd = [ "git", "remote", "add", bundle_remote, path ]
+        [ bundle_remote, path ] = self.bundle_tmp()
+        git_cmd = [ "git", "remote", "add", bundle_remote, f"{path}/fetch.bundle" ]
 
-    result = subprocess.run( git_cmd, shell=False, capture_output=True, text=True )
-    if result.returncode != 0:
-        print( f"{program_title}: error: Failed to add remote '{bundle_remote}' url: '{path}' {result.stderr}" )
-        return -1
+        result = subprocess.run( git_cmd, shell=False, capture_output=True, text=True )
+        if result.returncode == 0:
+            print( f"Added remote '{bundle_remote}' ({path})" )
+        else:
+            print( f"ERROR: Failed to add remote '{bundle_remote}' url: '{path}' {result.stderr} ({program_title})" )
+            return -1
 
-    return 0
-
-
-def corncob_remove( remote, dotdotdot ):
-    """Remove a CornCob remote
-    """
-
-    git_cmd = [ "git", "remote", "remove", remote ]
-    result1 = subprocess.run( git_cmd, shell=False, capture_output=True, text=True )
-    if result1.returncode != 0:
-        print( f"{program_title}: error: Failed to remove remote '{remote}' {result1.stderr}" )
-
-    bundle_remote = f"{remote}-corncob-bundle-tmp"
-    git_cmd = [ "git", "remote", "remove", bundle_remote ]
-    result2 = subprocess.run( git_cmd, shell=False, capture_output=True, text=True )
-    if result2.returncode != 0:
-        print( f"{program_title}: error: Failed to remove remote '{bundle_remote}' {result2.stderr}" )
-
-    if result1.returncode == 0 && result2.returncode == 0:
         return 0
 
-    return -1
+
+    def remove_remote( self, dotdotdot ):
+        """Remove a CornCob remote
+        """
+
+        git_cmd = [ "git", "remote", "remove", self.remote_name ]
+        result1 = subprocess.run( git_cmd, shell=False, capture_output=True, text=True )
+        if result1.returncode == 0:
+            print( f"Removed remote '{self.remote_name}'" )
+        else:
+            print( f"ERROR: Failed to remove remote '{self.remote_name}' {result1.stderr} ({program_title})" )
+
+        [ bundle_remote, _ ] = self.bundle_tmp()
+        git_cmd = [ "git", "remote", "remove", bundle_remote ]
+        result2 = subprocess.run( git_cmd, shell=False, capture_output=True, text=True )
+        if result2.returncode == 0:
+            print( f"Removed remote '{bundle_remote}'" )
+        else:
+            print( f"ERROR: Failed to remove remote '{bundle_remote}' {result2.stderr} ({program_title})" )
+
+        if result1.returncode == 0 and result2.returncode == 0:
+            return 0
+
+        return -1
 
 
-def corncob_push( remote_name, corncob_url, branches ):
-    print( f"PUSH {remote_name} {corncob_url} {branches}" )
-    remote = CornCobRemote.init( corncob_url )
-    latest_link = remote.get_latest_link()
-
-    if latest_link is None:
-        bundle_uid = token_hex( 8 )
-        local_bundle_path = f".{os.path.sep}.corncob-bundle-tmp{os.path.sep}tmp-{bundle_uid}.bundle"
-        git_cmd = [ "git", "bundle", "create", local_bundle_path, "main" ]
-
+    def initialize_existing_remote( self ):
+        """ git remote get-url `remote_name`
+        with some error checking. Plus strip the 'corncob:' prefix,
+        """
+        git_cmd = [ "git", "remote", "get-url", self.remote_name ]
         result = subprocess.run( git_cmd, shell=False, capture_output=True, text=True )
 
         if result.returncode != 0:
-            print( f"git bundle failed {result.stderr}" )
-            return -1
+            print( f"ERROR: Unknown remote '{self.remote_name}' {result.stderr} ({program_title})" )
+            return None
 
-        prerequisites = { "main", "initial-snapshot" }
-        blob = build_link_blob( "initial-snapshot", "initial-snapshot", bundle_uid, prerequisites )
-        print( f"Initializing new CornCob clone '{path_str}' {blob}" )
-        #         - - uid for this link
-        #           - uid for prev link -or- "initial-snapshot"
-        #           - uid for link before that, etc
-        #         - *** branches ***
-        #         - - - random id for latest bundle
-        #             - - branch name
-        #               - sha before
-        #             - - branch name
-        #               - sha before
-        #           - - random id for prev bundle
-        #             - - branch name
-        #               - sha before
-        #             - - branch name
-        #               - sha before
-        #           - - random id for bundle before that, etc
-        #         - { k/v s }
+        remote_url = result.stdout.strip()
+
+        if not remote_url.startswith( "corncob:" ):
+            print( f"ERROR: Wrong remote protocol '{remote_url}' ({program_title})" )
+            return None
+
+        # Strip 'corncob:'
+        self.url = remote_url[ 8: ]
+
+
+    def push_to_remote( self, branches ):
+        print( f"PUSH {self.remote_name} {self.url} '{branches}'" )
+        latest_link = self.remote.get_latest_link()
+
+        if latest_link is None:
+            bundle_uid = Corncob.token_hex( 8 )
+            [ _, path_tmp ] = self.bundle_tmp()
+            os.makedirs( path_tmp, exist_ok=True )
+            bundle_path_tmp = f"{path_tmp}/B-{bundle_uid}.bundle"
+            git_cmd = [ "git", "bundle", "create", bundle_path_tmp, "main" ]
+
+            result = subprocess.run( git_cmd, shell=False, capture_output=True, text=True )
+
+            if result.returncode != 0:
+                print( f"git bundle failed {result.stderr}" )
+                return -1
+
+            prerequisites = { "main": "initial-snapshot" }
+            blob = self.build_link_blob( "initial-snapshot", "initial-snapshot", bundle_uid, prerequisites )
+            print( f"Initializing new CornCob clone '{bundle_path_tmp}' {blob}" )
+            #         - - uid for this link
+            #           - uid for prev link -or- "initial-snapshot"
+            #           - uid for link before that, etc
+            #         - *** branches ***
+            #         - - - random id for latest bundle
+            #             - - branch name
+            #               - sha before
+            #             - - branch name
+            #               - sha before
+            #           - - random id for prev bundle
+            #             - - branch name
+            #               - sha before
+            #             - - branch name
+            #               - sha before
+            #           - - random id for bundle before that, etc
+            #         - { k/v s }
                    
 
-        #     return 0
-        return remote.upload_latest_link( blob, bundle_uid, local_bundle_path )
+            #     return 0
+            return self.remote.upload_latest_link( blob, bundle_uid, bundle_path_tmp )
 
-    else:
-        raise NotImplementedError( f"Updating CornCob clone. {remote_name} {corncob_url}" )
-
-
-
-def build_link_blob( new_link_uid, prev_link_id, bundle_uid, prerequisites ):
-    link_ids = [ new_link_uid, prev_link_uid ]
-    branch_names = get_branches()
-    branches = []
-    for branch in branch_names:
-        branches.append( [ branch, get_branch_head_sha( branch ) ] )
-    print( f"BRANCHES {branches}" )
-    bundles = [ [ bundle_uid, [ "main", prerequisites[ "main" ] ] ] ]
-    supplement = {}
-    return [ link_ids, branches, bundles, supplement ]
+        else:
+            raise NotImplementedError( f"Updating CornCob clone. {remote_name} {corncob_url}" )
 
 
-def corncob_fetch( remote, corncob_url, branches ):
-    print( f"FETCH {remote} {corncob_url} {branches}" )
-    remote = CornCobRemote.init( corncob_url )
-    latest_link = remote.get_latest_link()
+    def build_link_blob( self, new_link_uid, prev_link_uid, bundle_uid, prerequisites ):
+        link_ids = [ new_link_uid, prev_link_uid ]
+        branch_names = self.get_branches()
+        branches = []
+        for branch in branch_names:
+            branches.append( [ branch, self.get_branch_head_sha( branch ) ] )
+        print( f"BRANCHES {branches}" )
+        bundles = [ [ bundle_uid, [ "main", prerequisites[ "main" ] ] ] ]
+        supplement = {}
+        return [ link_ids, branches, bundles, supplement ]
 
-    if latest_link == None:
-        print( f"ERROR: Failed to fetch latest link '{corncob_url}' ({program_title})" )
+
+    def clone_from_remote( self, url ):
+        print( f"CLONE {self.remote_name} {url}" )
+
+        git_cmd = [ "git", "rev-parse", "--show-toplevel" ]
+        result = subprocess.run( git_cmd, capture_output=True, text=True )
+        if result.returncode == 0:
+            print( f"ERROR. Trying to clone, but already in a repo '{os.getcwd()}' '{result.stdout.strip()}' ({program_title})" )
+            return -1
+
+        # git_cmd = [ "git", "init" ]
+        # result = subprocess.run( git_cmd, capture_output=True, text=True )
+        # if result.returncode != 0:
+        #     print( f"ERROR. clone > git init failed. ({program_title})" )
+        #     return result.returncode
+        # result = self.add_remote( url, [] ):
+        
+        self.remote = CornCobRemote.init( url )
+        latest_link = self.remote.get_latest_link()
+        if latest_link == None:
+            print( f"CLONE SADNESS" )
+            return -1
+        
+        [ link_ids, branches, bundles, supp_data ] = latest_link
+        if link_ids[ 0 ] != "initial-snapshot":
+            print( f"CLONE MORE THAN INIT {link_ids[ 0 ]}" )
+            return -1
+
+        if len( bundles ) != 1:
+            print( f"CLONE BS {bundles}" )
+            return -1
+
+        bundle = bundles[ 0 ]
+        bundle_uid = bundle[ 0 ]
+
+        with tempfile.TemporaryDirectory() as bundle_temp_dir:
+            bundle_path = f"{bundle_temp_dir}/clone.bundle"
+            self.remote.download_bundle( bundle_uid, bundle_path )
+
+            git_cmd = [ "git", "clone", bundle_path, "." ]
+            result = subprocess.run( git_cmd, capture_output=True, text=True )
+            if result.returncode != 0:
+                print( f"ERROR. git clone from bundle failed {result.stdout}  {result.stderr} ({program_title})" )
+                return -1
+
+        git_cmd = [ "git", "checkout", "main" ]
+        result = subprocess.run( git_cmd, capture_output=True, text=True )
+        if result.returncode != 0:
+            print( f"ERROR. git checkout bundle failed {result.stdout}  {result.stderr} ({program_title})" )
+            return -1
+
+        result = self.add_remote( url, [] )
+        if 0 != result:
+            print( f"ADD REMOTE AFTER CLONE FAILED" )
+            return result
+        print( f"CLONE WORKED!!!" )
+        return 0
+        
+
+    def fetch_from_remote( self, branches ):
+        print( f"FETCH {self.remote_name} {self.url} {branches}" )
+        latest_link = self.remote.get_latest_link()
+
+        if latest_link == None:
+            print( f"ERROR: Failed to fetch latest link '{corncob_url}' ({program_title})" )
+            return -1
+
+
+        [ _, path_tmp ] = self.bundle_tmp()
+
+        # copy to temp location
+        # git fetch remote-temp
+
+
+    def get_branches( self ):
+        """ git for-each-ref --format=%(refname:short) refs/heads/
+        with error checking
+        """
+        git_cmd = [ "git", "for-each-ref", "--format=%(refname:short)", "refs/heads/" ]
+        # cwd=repo_path, 
+        result = subprocess.run( git_cmd, shell=False, capture_output=True, text=True )
+
+        if result.returncode == 0:
+            return result.stdout.splitlines()
+
+        print( "Error:", result.stderr )
+        return []
+
+
+    def get_branch_head_sha( self, branch ):
+        command = [ "git", "rev-parse", f"refs/heads/{branch}" ]
+        # cwd=repo_path,
+        print( f"MLERP {branch}" )
+        result = subprocess.run( command, shell=False, capture_output=True, text=True )
+
+        if result.returncode == 0:
+            return result.stdout.strip()
+
+        print( "Error:", result.stderr )
+        return "0xdeadbeef"
+
+
+    def token_hex( num_bytes ):
+        return "".join( f"{b:02x}" for b in secrets.token_bytes( num_bytes ) )
+
+
+    def change_to_root_git_dir( self ):
+        """ cd $( git rev-parse --show-toplevel )
+        with some error checking
+        """
+        git_cmd = [ "git", "rev-parse", "--show-toplevel" ]
+        result = subprocess.run( git_cmd, capture_output=True, text=True )
+        if result.returncode != 0:
+            print( f"ERROR. Current directory not a Git repo '{os.getcwd()}' ({program_title})" )
+            return result.returncode
+        git_dir = result.stdout.strip()
+        os.chdir( git_dir )
+        if pathlib.Path( git_dir ).resolve() == pathlib.Path( os.getcwd() ).resolve():
+            return 0
+        print( f"ERROR. Weird os.chdir() failure? {result.stdout} {os.getcwd()} ({program_title})" )
         return -1
 
+    def bundle_tmp( self ):
+        return [ f"{self.remote_name}-corncob-bundle-tmp",
+                 f"./.corncob-bundle-tmp/{self.remote_name}" ]
 
-    path_tmp = f".{os.path.sep}.corncob-bundle-tmp{os.path.sep}{remote}.bundle"
-
-    # copy to temp location
-    # git fetch remote-temp
-
-
-def get_branches():
-    """ git for-each-ref --format=%(refname:short) refs/heads/
-    with error checking
-    """
-    git_cmd = [ "git", "for-each-ref", "--format=%(refname:short)", "refs/heads/" ]
-    # cwd=repo_path, 
-    result = subprocess.run( git_cmd, shell=False, capture_output=True, text=True )
-
-    if result.returncode == 0:
-        return result.stdout.splitlines()
-
-    print( "Error:", result.stderr )
-    return []
-
-
-def get_branch_head_sha( branch ):
-    command = [ "git", "rev-parse", f"refs/heads/{branch}" ]
-    # cwd=repo_path,
-    print( f"MLERP {branch}" )
-    result = subprocess.run( command, shell=False, capture_output=True, text=True )
-
-    if result.returncode == 0:
-        return result.stdout.strip()
-
-    print( "Error:", result.stderr )
-    return "0xdeadbeef"
-
-
-def token_hex( num_bytes ):
-    return "".join( f"{b:02x}" for b in secrets.token_bytes( num_bytes ) )
-
-
-def change_to_root_git_dir():
-    """ cd $( git rev-parse --show-toplevel )
-    with some error checking
-    """
-    git_cmd = [ "git" "rev-parse" "--show-toplevel" ]
-    result = subprocess.run( git_cmd, shell=False, capture_output=True, text=True )
-    if result.returncode != 0:
-        print( f"ERROR. Current directory not a Git repo '{os.getcwd()}' ({program_title})" )
-        return result.returncode
-    os.chdir( result.stdout )
-    if pathlib.Path( result.stdout ).resolve() == pathlib.Path( os.getcwd() ).resolve():
-        return 0
-    print( f"ERROR. Weird os.chdir() failure? {result.stdout} {os.getcwd()} ({program_title})" )
-    return -1
-
-
-def get_corncob_url( remote_name ):
-    """ git remote get-url `remote_name`
-    with some error checking. Plus strip the 'corncob:' prefix,
-    """
-    git_cmd = [ "git", "remote", "get-url", remote_name ]
-    result = subprocess.run( git_cmd, shell=False, capture_output=True, text=True )
-
-    if result.returncode != 0:
-        print( f"ERROR: Unknown remote '{remote_name}' {result.stderr} ({program_title})" )
-        return None
-
-    remote_url = result.stdout
-
-    if not remote_url.startswith( "corncob:" ):
-        print( f"ERROR: Wrong remote protocol '{remote_url}' ({program_title})" )
-        return None
-
-    # Strip 'corncob:'
-    return remote_url[ 8: ]
 
 
 class CornCobRemote:
@@ -247,10 +335,11 @@ class CornCobRemote:
         link_ids = parsed_data[ 0 ]
         branches = parsed_data[ 1 ]
         bundles = parsed_data[ 2 ]
-        if len( parsed_data > 3 ):
+        if len( parsed_data ) > 3:
             supp_data = parsed_data[ 3 ]
         else:
             supp_data = {}
+        return [ link_ids, branches, bundles, supp_data ]
 
 
 class LocalFolderRemote( CornCobRemote ):
@@ -267,24 +356,31 @@ class LocalFolderRemote( CornCobRemote ):
         self.path = path
 
 
-    def upload_latest_link( blob, bundle_uid, local_bundle_path ):
+    def upload_latest_link( self, blob, bundle_uid, local_bundle_path ):
+        path_bundle = f"{self.path}{os.path.sep}B-{bundle_uid}.bundle"
+        # TODO: error handling
+        shutil.copy( local_bundle_path, path_bundle )
+
         path_latest = f"{self.path}{os.path.sep}latest-link.yaml"
         with open( path_latest, "w", encoding="utf-8" ) as link_strm:
             yaml.dump( blob, link_strm, default_flow_style=False )
 
-        path_bundle = f"{self.path}{os.path.sep}B{bundle_uid}.bundle"
-        # TODO: error handling
-        shutil.copy( local_bundle_path, path_bundle )
 
-
-    def get_latest_link():
+    def get_latest_link( self ):
         path_latest = f"{self.path}{os.path.sep}latest-link.yaml"
 
         if not os.path.exists( path_latest ):
             return None
 
         with open( path_latest, "r" ) as link_file_strm:
-            return read_link_blob( link_file_strm )
+            return self.read_link_blob( link_file_strm )
+
+
+    def download_bundle( self, bundle_uid, local_bundle_path ):
+        path_bundle = f"{self.path}{os.path.sep}B-{bundle_uid}.bundle"
+        # TODO: error handling
+        shutil.copy( path_bundle, local_bundle_path )
+
 
 if __name__ == "__main__":
     import argparse
@@ -296,4 +392,5 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    exit_code = main( args.command, args.remote, args.branches )
+    corncob = Corncob( args.remote )
+    sys.exit( corncob.main( args.command, args.branches ) )
