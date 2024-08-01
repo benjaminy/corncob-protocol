@@ -128,13 +128,13 @@ class Corncob:
         [ _, path_tmp ] = self.bundle_tmp()
         os.makedirs( path_tmp, exist_ok=True )
         bundle_path_tmp = f"{path_tmp}/B-{bundle_uid}.bundle"
-        self.gitCmd( [ "bundle", "create", bundle_path_tmp, "main" ] )
 
         latest_link = self.remote.get_latest_link()
         if latest_link is None:
             link_uid = "initial-snapshot"
             link_uid_prev = "initial-snapshot"
             prerequisites = { "main": "initial-snapshot" }
+            bundle_spec = "main"
             #         - - uid for this link
             #           - uid for prev link -or- "initial-snapshot"
             #           - uid for link before that, etc
@@ -164,7 +164,11 @@ class Corncob:
             branch = branches[ 0 ]
             assert( "main" == branch[ 0 ] )
             prerequisites = { "main": branch[ 1 ] }
+            tag = f"corncob_temp_tag_{'main'}"
+            self.gitCmd( [ "tag", tag, branch[ 1 ] ] )
+            bundle_spec = f"{tag}..main"
 
+        self.gitCmd( [ "bundle", "create", bundle_path_tmp, bundle_spec ] )
         blob = self.build_link_blob( link_uid, link_uid_prev, bundle_uid, prerequisites )
         print( f"Pushing to Corncob clone {link_uid} '{bundle_path_tmp}' {blob}" )
         return self.remote.upload_latest_link( link_uid, blob, bundle_uid, bundle_path_tmp )
@@ -228,7 +232,10 @@ class Corncob:
             print( f"ERROR: Failed to fetch latest link '{corncob_url}' ({program_title})" )
             return -1
 
-        [ link_ids, branches, bundles, supp_data ] = latest_link
+        return self.fetch_chain( latest_link, branches, False )
+
+    def fetch_chain( self, link, branches, doing_clone ):
+        [ link_ids, branches, bundles, supp_data ] = link
 
         if len( bundles ) != 1:
             print( f"FETCH BS {bundles}" )
@@ -245,12 +252,17 @@ class Corncob:
         if "initial-snapshot" == prereq:
             print( "ok?" )
         else:
-            print( f"{type( prereq )} {prereq}" )
-            result = self.gitCmd( [ "cat-file", "-t", prereq ], False )
-            if "commit" == result.stdout.strip():
-                print( "yay!" )
+            if doing_clone:
+                follow_chain = True
             else:
-                raise NotImplementedError( f"GO BACK FURTHER!!!" )
+                result = self.gitCmd( [ "cat-file", "-t", prereq ], False )
+                follow_chain = ( "commit" != result.stdout.strip() )
+
+            if follow_chain:
+                next_link = self.remote.get_link( link_ids[ 1 ] )
+                result = self.fetch_chain( next_link, branches, doing_clone )
+                if 0 != result:
+                    return result
 
         [ tmp_remote, path_tmp ] = self.bundle_tmp()
         os.makedirs( path_tmp, exist_ok=True )
@@ -393,14 +405,22 @@ class LocalFolderRemote( CornCobRemote ):
             yaml.dump( blob, link_strm, default_flow_style=False )
 
 
-    def get_latest_link( self ):
-        path_latest = f"{self.path}{os.path.sep}latest-link.yaml"
+    def get_link( self, uid ):
+        if uid == "latest-link":
+            path_link = f"{self.path}{os.path.sep}latest-link.yaml"
+        else:
+            path_link = f"{self.path}{os.path.sep}L-{uid}.yaml"
 
-        if not os.path.exists( path_latest ):
+        if not os.path.exists( path_link ):
+            print( f"FILE DOES NOT EXIST {path_link}" )
             return None
 
-        with open( path_latest, "r" ) as link_file_strm:
+        with open( path_link, "r" ) as link_file_strm:
             return self.read_link_blob( link_file_strm )
+
+
+    def get_latest_link( self ):
+        return self.get_link( "latest-link" )
 
 
     def download_bundle( self, bundle_uid, local_bundle_path ):

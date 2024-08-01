@@ -2,6 +2,7 @@ import tempfile
 import os
 import sys
 import subprocess
+import random
 from corncob_test_utils import CorncobTest, gitCmd
 
 def main():
@@ -25,8 +26,12 @@ def main():
 
         with open( "hi_bob.txt", "w" ) as file:
             file.write( "Hi there Bob!" )
+        with open( "big.txt", "w" ) as file:
+            for _ in range( 10000 ):
+                file.write( random.choice( [ "Alice", "Bob", "Carol", "Dave", "Eve" ] ) )
 
         gitCmd( [ "add", "hi_bob.txt" ] )
+        gitCmd( [ "add", "big.txt" ] )
         gitCmd( [ "commit", "-m", "greeting" ] )
         print( f"ALICE STATUS:" )
         gitCmd( [ "status", "-v" ], False )
@@ -76,7 +81,7 @@ def main():
         test_utils.corncob_cmd( [ "push", "a_team_alice" ] )
 
         print( "Alice's remote dir:" )
-        result = subprocess.run( [ "ls", alice_remote ], capture_output=True, text=True )
+        result = subprocess.run( [ "ls", "-l", alice_remote ], capture_output=True, text=True )
         print( result.stdout )
 
         os.chdir( bob_local )
