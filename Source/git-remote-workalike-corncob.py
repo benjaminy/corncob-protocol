@@ -130,7 +130,7 @@ class Corncob:
         bundle_path_tmp = f"{path_tmp}/B-{bundle_uid}.bundle"
 
         latest_link = self.remote.get_latest_link()
-        if latest_link is None:
+        if None == latest_link:
             link_uid = "initial-snapshot"
             link_uid_prev = "initial-snapshot"
             prerequisites = { "main": "initial-snapshot" }
@@ -169,6 +169,10 @@ class Corncob:
             bundle_spec = f"{tag}..main"
 
         self.gitCmd( [ "bundle", "create", bundle_path_tmp, bundle_spec ] )
+
+        if None != latest_link:
+            self.gitCmd( [ "tag", "-d", tag ] )
+
         blob = self.build_link_blob( link_uid, link_uid_prev, bundle_uid, prerequisites )
         print( f"Pushing to Corncob clone {link_uid} '{bundle_path_tmp}' {blob}" )
         return self.remote.upload_latest_link( link_uid, blob, bundle_uid, bundle_path_tmp )
