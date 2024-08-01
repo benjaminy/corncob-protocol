@@ -2,7 +2,7 @@ import tempfile
 import os
 import sys
 import subprocess
-from corncob_test_utils import CorncobTest
+from corncob_test_utils import CorncobTest, gitCmd
 
 def main():
 
@@ -21,54 +21,26 @@ def main():
 
         os.chdir( alice_local )
 
-        git_cmd = [ "git", "init" ]
-        result = subprocess.run( git_cmd, shell=False, capture_output=True, text=True )
-        if 0 != result.returncode:
-            print( f"ERROR. git init {result.returncode} {result.stdout}" )
-            return result.returncode
+        gitCmd( [ "init" ] )
 
         with open( "hi_bob.txt", "w" ) as file:
             file.write( "Hi there Bob!" )
 
-        git_cmd = [ "git", "add", "hi_bob.txt" ]
-        result = subprocess.run( git_cmd, shell=False, capture_output=True, text=True )
-        if 0 != result.returncode:
-            print( f"ERROR. git add {result.returncode} {result.stdout}" )
-            return result.returncode
+        gitCmd( [ "add", "hi_bob.txt" ] )
+        gitCmd( [ "commit", "-m", "greeting" ] )
+        print( f"ALICE STATUS:" )
+        gitCmd( [ "status", "-v" ], False )
 
-        git_cmd = [ "git", "commit", "-m", "greeting" ]
-        result = subprocess.run( git_cmd, shell=False, capture_output=True, text=True )
-        if 0 != result.returncode:
-            print( f"ERROR. git add {result.returncode} {result.stdout}" )
-            return result.returncode
-
-        result = subprocess.run( [ "git", "status", "-v" ], capture_output=True, text=True )
-        print( f"ALICE STATUS {result.stdout}" )
-
-        result = test_utils.corncob_cmd( [ "add", "a_team_alice", f"file://{alice_remote}" ] )
-        if 0 != result.returncode:
-            print( f"ERROR. corncob add {result.returncode} {result.stdout} {result.stderr}" )
-            return result.returncode
-
-        result = test_utils.corncob_cmd( [ "add", "a_team_bob", f"file://{bob_remote}" ] )
-        if 0 != result.returncode:
-            print( f"ERROR. corncob add {result.returncode} {result.stdout} {result.stderr}" )
-            return result.returncode
-
-        result = test_utils.corncob_cmd( [ "push", "a_team_alice" ] )
-        if 0 != result.returncode:
-            print( f"ERROR. corncob push {result.returncode} {result.stdout}" )
-            return result.returncode
+        test_utils.corncob_cmd( [ "add", "a_team_alice", f"file://{alice_remote}" ] )
+        test_utils.corncob_cmd( [ "add", "a_team_bob", f"file://{bob_remote}" ] )
+        test_utils.corncob_cmd( [ "push", "a_team_alice" ] )
 
         result = subprocess.run( [ "ls", alice_remote ], capture_output=True, text=True )
         print( result.stdout )
 
         os.chdir( bob_local )
 
-        result = test_utils.corncob_cmd( [ "clone", "a_team_alice", f"file://{alice_remote}" ] )
-        if 0 != result.returncode:
-            print( f"ERROR. corncob clone {result.returncode} {result.stdout} {result.stderr}" )
-            return result.returncode
+        test_utils.corncob_cmd( [ "clone", "a_team_alice", f"file://{alice_remote}" ] )
 
         result = subprocess.run( [ "git", "status", "-v" ], capture_output=True, text=True )
         print( result.stdout )
@@ -77,51 +49,43 @@ def main():
         result = subprocess.run( [ "ls", "-la", bob_local ], capture_output=True, text=True )
         print( result.stdout )
 
-        result = test_utils.corncob_cmd( [ "add", "a_team_bob", f"file://{bob_remote}" ] )
-        if 0 != result.returncode:
-            print( f"ERROR. corncob add {result.returncode} {result.stdout} {result.stderr}" )
-            return result.returncode
+        test_utils.corncob_cmd( [ "add", "a_team_bob", f"file://{bob_remote}" ] )
 
         with open( "hi_bob.txt", "a" ) as file:
             file.write( "Hello Alice!" )
 
-        git_cmd = [ "git", "add", "hi_bob.txt" ]
-        result = subprocess.run( git_cmd, shell=False, capture_output=True, text=True )
-        if 0 != result.returncode:
-            print( f"ERROR. git add {result.returncode} {result.stdout}" )
-            return result.returncode
-
-        git_cmd = [ "git", "commit", "-m", "back at you" ]
-        result = subprocess.run( git_cmd, shell=False, capture_output=True, text=True )
-        if 0 != result.returncode:
-            print( f"ERROR. git add {result.returncode} {result.stdout}" )
-            return result.returncode
-
-        result = test_utils.corncob_cmd( [ "push", "a_team_bob" ] )
-        if 0 != result.returncode:
-            print( f"ERROR. corncob push {result.returncode} {result.stdout}" )
-            return result.returncode
+        gitCmd( [ "add", "hi_bob.txt" ] )
+        gitCmd( [ "commit", "-m", "back at you" ] )
+        test_utils.corncob_cmd( [ "push", "a_team_bob" ] )
 
         result = subprocess.run( [ "ls", bob_remote ], capture_output=True, text=True )
         print( result.stdout )
 
         os.chdir( alice_local )
 
-        result = test_utils.corncob_cmd( [ "fetch", "a_team_bob" ] )
-        if 0 != result.returncode:
-            print( f"ERROR. corncob fetch {result.returncode} {result.stdout} {result.stderr}" )
-            return result.returncode
-
-        result = test_utils.corncob_cmd( [ "merge", "a_team_bob", "main" ] )
-        if 0 != result.returncode:
-            print( f"ERROR. corncob merge {result.returncode} {result.stdout} {result.stderr}" )
-            return result.returncode
+        test_utils.corncob_cmd( [ "fetch", "a_team_bob" ] )
+        test_utils.corncob_cmd( [ "merge", "a_team_bob", "main" ] )
 
         with open( "hi_bob.txt", "r" ) as file:
             print( file.read() )
 
-    # At this point, the temporary directory and its contents have been deleted
-    print(f'Temporary directory exists after with block: {os.path.exists(temp_dir)}')
+        with open( "hi_bob.txt", "a" ) as file:
+            file.write( " How about dinner?" )
+        gitCmd( [ "add", "hi_bob.txt" ] )
+        gitCmd( [ "commit", "-m", "a proposal" ] )
+        test_utils.corncob_cmd( [ "push", "a_team_alice" ] )
+
+        print( "Alice's remote dir:" )
+        result = subprocess.run( [ "ls", alice_remote ], capture_output=True, text=True )
+        print( result.stdout )
+
+        os.chdir( bob_local )
+
+        test_utils.corncob_cmd( [ "fetch", "a_team_alice" ] )
+        test_utils.corncob_cmd( [ "merge", "a_team_alice", "main" ] )
+
+        with open( "hi_bob.txt", "r" ) as file:
+            print( file.read() )
     return 0
 
 if __name__ == "__main__":
