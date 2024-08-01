@@ -48,7 +48,9 @@ class Corncob:
         if cmd == "push":
             return self.push_to_remote( dotdotdot )
         elif cmd == "fetch":
-            return self.corncob_fetch( dotdotdot )
+            return self.fetch_from_remote( dotdotdot )
+        elif cmd == "merge":
+            return self.merge_from_remote( dotdotdot )
         else:
             print( f"ERROR: Unknown command '{cmd}' ({program_title})" )
 
@@ -259,11 +261,57 @@ class Corncob:
             print( f"ERROR: Failed to fetch latest link '{corncob_url}' ({program_title})" )
             return -1
 
+        [ link_ids, branches, bundles, supp_data ] = latest_link
+        if link_ids[ 0 ] != "initial-snapshot":
+            print( f"CLONE MORE THAN INIT {link_ids[ 0 ]}" )
+            return -1
 
-        [ _, path_tmp ] = self.bundle_tmp()
+        if len( bundles ) != 1:
+            print( f"CLONE BS {bundles}" )
+            return -1
+
+        bundle = bundles[ 0 ]
+        bundle_uid = bundle[ 0 ]
+
+        [ tmp_remote, path_tmp ] = self.bundle_tmp()
+        os.makedirs( path_tmp, exist_ok=True )
+
+        bundle_path = f"{path_tmp}/fetch.bundle"
+        self.remote.download_bundle( bundle_uid, bundle_path )
+
+        git_cmd = [ "git", "bundle", "verify", bundle_path ]
+        result = subprocess.run( git_cmd, capture_output=True, text=True )
+        if result.returncode != 0:
+            print( f"ERROR. git bundle verify failed {result.stdout}  {result.stderr} ({program_title})" )
+            return -1
+
+        git_cmd = [ "git", "fetch", tmp_remote ]
+        result = subprocess.run( git_cmd, capture_output=True, text=True )
+        if result.returncode != 0:
+            print( f"ERROR. git fetch bundle failed {result.stdout}  {result.stderr} ({program_title})" )
+            return -1
+
+        git_cmd = [ "git", "branch", "-v", "-a" ]
+        result = subprocess.run( git_cmd, capture_output=True, text=True )
+        print( f"** git branch '{result.stdout}'  '{result.stderr}'" )
 
         # copy to temp location
         # git fetch remote-temp
+        return 0
+
+
+    def merge_from_remote( self, branches ):
+        print( f"MERGE {self.remote_name} {branches}" )
+        branch = branches[ 0 ]
+
+        [ tmp_remote, _ ] = self.bundle_tmp()
+
+        git_cmd = [ "git", "merge", f"{tmp_remote}/{branch}" ]
+        result = subprocess.run( git_cmd, capture_output=True, text=True )
+        if result.returncode != 0:
+            print( f"ERROR. git merge bundle failed {result.stdout}  {result.stderr} ({program_title})" )
+            return -1
+        return 0
 
 
     def get_branches( self ):

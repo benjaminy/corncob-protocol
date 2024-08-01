@@ -45,12 +45,17 @@ def main():
         result = subprocess.run( [ "git", "status", "-v" ], capture_output=True, text=True )
         print( f"ALICE STATUS {result.stdout}" )
 
-        result = test_utils.corncob_cmd( [ "add", "remote_blah", f"file://{alice_remote}" ] )
+        result = test_utils.corncob_cmd( [ "add", "a_team_alice", f"file://{alice_remote}" ] )
         if 0 != result.returncode:
             print( f"ERROR. corncob add {result.returncode} {result.stdout} {result.stderr}" )
             return result.returncode
 
-        result = test_utils.corncob_cmd( [ "push", "remote_blah" ] )
+        result = test_utils.corncob_cmd( [ "add", "a_team_bob", f"file://{bob_remote}" ] )
+        if 0 != result.returncode:
+            print( f"ERROR. corncob add {result.returncode} {result.stdout} {result.stderr}" )
+            return result.returncode
+
+        result = test_utils.corncob_cmd( [ "push", "a_team_alice" ] )
         if 0 != result.returncode:
             print( f"ERROR. corncob push {result.returncode} {result.stdout}" )
             return result.returncode
@@ -72,13 +77,48 @@ def main():
         result = subprocess.run( [ "ls", "-la", bob_local ], capture_output=True, text=True )
         print( result.stdout )
 
-        # You can use this directory for temporary file storage
-        temp_file_path = os.path.join(temp_dir, 'temp_file.txt')
-        with open(temp_file_path, 'w') as temp_file:
-            temp_file.write('This is a temporary file.')
+        result = test_utils.corncob_cmd( [ "add", "a_team_bob", f"file://{bob_remote}" ] )
+        if 0 != result.returncode:
+            print( f"ERROR. corncob add {result.returncode} {result.stdout} {result.stderr}" )
+            return result.returncode
 
-        # The temporary directory and its contents are automatically deleted
-        # when the context manager exits
+        with open( "hi_bob.txt", "a" ) as file:
+            file.write( "Hello Alice!" )
+
+        git_cmd = [ "git", "add", "hi_bob.txt" ]
+        result = subprocess.run( git_cmd, shell=False, capture_output=True, text=True )
+        if 0 != result.returncode:
+            print( f"ERROR. git add {result.returncode} {result.stdout}" )
+            return result.returncode
+
+        git_cmd = [ "git", "commit", "-m", "back at you" ]
+        result = subprocess.run( git_cmd, shell=False, capture_output=True, text=True )
+        if 0 != result.returncode:
+            print( f"ERROR. git add {result.returncode} {result.stdout}" )
+            return result.returncode
+
+        result = test_utils.corncob_cmd( [ "push", "a_team_bob" ] )
+        if 0 != result.returncode:
+            print( f"ERROR. corncob push {result.returncode} {result.stdout}" )
+            return result.returncode
+
+        result = subprocess.run( [ "ls", bob_remote ], capture_output=True, text=True )
+        print( result.stdout )
+
+        os.chdir( alice_local )
+
+        result = test_utils.corncob_cmd( [ "fetch", "a_team_bob" ] )
+        if 0 != result.returncode:
+            print( f"ERROR. corncob fetch {result.returncode} {result.stdout} {result.stderr}" )
+            return result.returncode
+
+        result = test_utils.corncob_cmd( [ "merge", "a_team_bob", "main" ] )
+        if 0 != result.returncode:
+            print( f"ERROR. corncob merge {result.returncode} {result.stdout} {result.stderr}" )
+            return result.returncode
+
+        with open( "hi_bob.txt", "r" ) as file:
+            print( file.read() )
 
     # At this point, the temporary directory and its contents have been deleted
     print(f'Temporary directory exists after with block: {os.path.exists(temp_dir)}')
